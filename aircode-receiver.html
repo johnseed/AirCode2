@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AirCode 接收端</title>
+    <!-- <script src="https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js"></script> -->
+    <script src="pako.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        h1 {
+            margin-bottom: 20px;
+        }
+        #inputArea {
+            width: 100%;
+            height: 100px;
+            margin-bottom: 20px;
+        }
+        #status, #result {
+            width: 100%;
+            margin-bottom: 20px;
+        }
+        #progress {
+            width: 100%;
+            background-color: #f0f0f0;
+            border-radius: 5px;
+            margin-bottom: 20px;
+        }
+        #progressBar {
+            width: 0%;
+            height: 20px;
+            background-color: #4CAF50;
+            border-radius: 5px;
+            text-align: center;
+            line-height: 20px;
+            color: white;
+        }
+        #downloadBtn {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <h1>AirCode 接收端</h1>
+    <textarea id="inputArea" placeholder="扫描二维码后数据将显示在这里"></textarea>
+    <div id="status">等待扫描...</div>
+    <div id="progress">
+        <div id="progressBar"></div>
+    </div>
+    <div id="result"></div>
+    <a id="downloadBtn" download="received_file">下载文件</a>
+
+    <script>
+        let receivedChunks = {};
+        let totalChunks = 0;
+
+        // 自动聚焦到输入区域
+        window.onload = () => document.getElementById('inputArea').focus();
+
+        document.getElementById('inputArea').addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                processInput(this.value);
+                this.value = '';
+            }
+        });
+
+        function processInput(input) {
+            const [metadata, data] = input.split('|');
+            const [total, index, checksum] = metadata.split(',');
+
+            if (crc32(data) != checksum) {
+                updateStatus(`校验失败：第 ${index} 段数据`);
+                return;
+            }
+
+            totalChunks = parseInt(total);
+            receivedChunks[parseInt(index)] = data;
+
+            updateProgress();
+
+            if (Object.keys(receivedChunks).length === totalChunks) {
+                reconstructData();
+            }
+        }
+
+        function updateProgress() {
+            const progress = Math.round((Object.keys(receivedChunks).length / totalChunks) * 100);
+            document.getElementById('progressBar').style.width = `${progress}%`;
+            document.getElementById('progressBar').textContent = `${progress}%`;
+            updateStatus(`已接收 ${Object.keys(receivedChunks).length} / ${totalChunks} 段数据`);
+        }
+
+        function updateStatus(message) {
+            document.getElementById('status').textContent = message;
+        }
+
+        function reconstructData() {
+            updateStatus('正在重构数据...');
+            const orderedData = Object.keys(receivedChunks)
+                .sort((a, b) => a - b)
+                .map(key => receivedChunks[key])
+                .join('');
+
+            const compressed = Uint8Array.from(atob(orderedData), c => c.charCodeAt(0));
+            
+            try {
+                const decompressed = pako.inflate(compressed);
+                const result = new TextDecoder().decode(decompressed);
+                
+                document.getElementById('result').textContent = result;
+                updateStatus('数据接收完成并成功解压');
+                
+                // 创建下载链接
+                const blob = new Blob([decompressed], {type: 'application/octet-stream'});
+                const downloadBtn = document.getElementById('downloadBtn');
+                downloadBtn.href = URL.createObjectURL(blob);
+                downloadBtn.style.display = 'inline';
+            } catch (error) {
+                updateStatus('解压数据时出错: ' + error.message);
+            }
+        }
+
+        // CRC32 实现 (与发送端相同)
+        function crc32(str) {
+            let crc = -1;
+            for (let i = 0; i < str.length; i++) {
+                crc = crc >>> 8 ^ table[(crc ^ str.charCodeAt(i)) & 0xFF];
+            }
+            return (crc ^ (-1)) >>> 0;
+        }
+
+        const table = new Uint32Array(256);
+        for (let i = 0; i < 256; i++) {
+            let c = i;
+            for (let j = 0; j < 8; j++) {
+                c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1;
+            }
+            table[i] = c;
+        }
+    </script>
+</body>
+</html>

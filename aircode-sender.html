@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AirCode 发送端</title>
+    <!-- <script src="https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script> -->
+    <script src="pako.min.js"></script>
+    <script src="qrcode.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        h1 {
+            margin-bottom: 20px;
+        }
+        .input-section {
+            width: 100%;
+            margin-bottom: 20px;
+        }
+        #fileInput, #textInput {
+            width: 100%;
+            margin-bottom: 10px;
+        }
+        #textInput {
+            height: 100px;
+        }
+        #qrcode {
+            width: 250px;
+            height: 250px;
+            border: 1px solid #ccc;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            margin-bottom: 20px;
+            overflow: hidden;
+        }
+        #qrcode img {
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: contain;
+        }
+        #controls {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            margin-bottom: 10px;
+            width: 100%;
+        }
+        #controls button {
+            margin: 0 10px;
+            padding: 5px 10px;
+        }
+        #qrIndex {
+            margin: 0 10px;
+        }
+        #progress {
+            width: 100%;
+            background-color: #f0f0f0;
+            border-radius: 5px;
+            margin-top: 10px;
+        }
+        #progressBar {
+            width: 0%;
+            height: 20px;
+            background-color: #4CAF50;
+            border-radius: 5px;
+            text-align: center;
+            line-height: 20px;
+            color: white;
+        }
+    </style>
+</head>
+<body>
+    <h1>AirCode 发送端</h1>
+    <div class="input-section">
+        <input type="file" id="fileInput">
+        <textarea id="textInput" placeholder="或者在此输入文本"></textarea>
+        <button onclick="processInput()">生成二维码</button>
+    </div>
+    <div id="qrcode"></div>
+    <div id="controls">
+        <button onclick="prevQR()" id="prevButton" disabled>上一个</button>
+        <span id="qrIndex"></span>
+        <button onclick="nextQR()" id="nextButton" disabled>下一个</button>
+    </div>
+    <div id="progress">
+        <div id="progressBar"></div>
+    </div>
+
+    <script>
+        let qrCodes = [];
+        let currentQRIndex = 0;
+
+        function arrayBufferToBase64(buffer) {
+            let binary = '';
+            const bytes = new Uint8Array(buffer);
+            const len = bytes.byteLength;
+            for (let i = 0; i < len; i++) {
+                binary += String.fromCharCode(bytes[i]);
+            }
+            return btoa(binary);
+        }
+
+        async function processInput() {
+            const file = document.getElementById('fileInput').files[0];
+            const text = document.getElementById('textInput').value;
+
+            let compressed;
+            if (file) {
+                const arrayBuffer = await file.arrayBuffer();
+                compressed = pako.deflate(new Uint8Array(arrayBuffer));
+            } else if (text) {
+                compressed = pako.deflate(text);
+            } else {
+                alert('请选择文件或输入文本');
+                return;
+            }
+
+            const base64 = arrayBufferToBase64(compressed);
+            
+            generateQRCodes(base64);
+        }
+
+        function generateQRCodes(base64) {
+            const chunkSize = 2936; // 每个二维码存储的字符数
+            const chunks = Math.ceil(base64.length / chunkSize);
+            
+            qrCodes = [];
+            for (let i = 0; i < chunks; i++) {
+                const start = i * chunkSize;
+                const end = Math.min((i + 1) * chunkSize, base64.length);
+                const chunk = base64.slice(start, end);
+                
+                // 添加元数据：总段数、当前段号、CRC32校验
+                const metadata = `${chunks},${i + 1},${crc32(chunk)}`;
+                const qrData = metadata + '|' + chunk;
+                
+                // 生成二维码
+                const qr = qrcode(0, 'L');
+                qr.addData(qrData);
+                qr.make();
+                
+                qrCodes.push(qr.createDataURL(10));
+            }
+
+            currentQRIndex = 0;
+            updateQRDisplay();
+            updateControls();
+        }
+
+        function updateQRDisplay() {
+            const qrcodeContainer = document.getElementById('qrcode');
+            qrcodeContainer.innerHTML = `<img src="${qrCodes[currentQRIndex]}" alt="QR Code">`;
+            document.getElementById('qrIndex').textContent = `${currentQRIndex + 1} / ${qrCodes.length}`;
+            const progress = Math.round((currentQRIndex + 1) / qrCodes.length * 100);
+            document.getElementById('progressBar').style.width = `${progress}%`;
+            document.getElementById('progressBar').textContent = `${progress}%`;
+        }
+
+        function updateControls() {
+            document.getElementById('prevButton').disabled = currentQRIndex === 0;
+            document.getElementById('nextButton').disabled = currentQRIndex === qrCodes.length - 1;
+        }
+
+        function prevQR() {
+            if (currentQRIndex > 0) {
+                currentQRIndex--;
+                updateQRDisplay();
+                updateControls();
+            }
+        }
+
+        function nextQR() {
+            if (currentQRIndex < qrCodes.length - 1) {
+                currentQRIndex++;
+                updateQRDisplay();
+                updateControls();
+            }
+        }
+
+        // 简单的CRC32实现
+        function crc32(str) {
+            let crc = -1;
+            for (let i = 0; i < str.length; i++) {
+                crc = crc >>> 8 ^ table[(crc ^ str.charCodeAt(i)) & 0xFF];
+            }
+            return (crc ^ (-1)) >>> 0;
+        }
+
+        // CRC32查找表
+        const table = new Uint32Array(256);
+        for (let i = 0; i < 256; i++) {
+            let c = i;
+            for (let j = 0; j < 8; j++) {
+                c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1;
+            }
+            table[i] = c;
+        }
+    </script>
+</body>
+</html>
